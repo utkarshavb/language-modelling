@@ -1,4 +1,5 @@
-import os, tiktoken
+from pathlib import Path
+import tiktoken
 
 PAT = r"""'(?i:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?+\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]++[\r\n]*|\s*[\r\n]|\s+(?!\S)|\s+"""
 
@@ -19,7 +20,7 @@ def bytes_to_unicode() -> dict[int, str]:
     characters = [chr(n) for n in cs]
     return dict(zip(bs, characters))
 
-def get_mergeable_ranks(path: str|os.PathLike) -> dict[bytes, int]:
+def get_mergeable_ranks(path: str|Path) -> dict[bytes, int]:
     mergeable_ranks = {bytes([i]):i for i in range(256)}
     byte_dec = {v:k for k,v in bytes_to_unicode().items()}
     rank = 256
@@ -34,11 +35,11 @@ def get_mergeable_ranks(path: str|os.PathLike) -> dict[bytes, int]:
             rank += 1
     return mergeable_ranks
 
-def load_tokenizer(path: str|os.PathLike):
+def load_tokenizer(path: Path):
     mergeable_ranks = get_mergeable_ranks(path)
     special_tokens = {"<|endoftext|>": len(mergeable_ranks)}
     tokenizer = tiktoken.Encoding(
-        name="", pat_str=PAT, mergeable_ranks=mergeable_ranks,
-        special_tokens=special_tokens,
+        name=path.stem, mergeable_ranks=mergeable_ranks, 
+        pat_str=PAT, special_tokens=special_tokens,
     )
     return tokenizer
