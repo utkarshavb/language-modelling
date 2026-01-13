@@ -16,11 +16,11 @@ parser.add_argument(
     "-d", "--data_dir", default="data/tokenized_tinystories",
     help="Directory containing the tokenized training (train.npy) and validation (valid.npy) texts"
 )
-parser.add_argument("-t", "--tokenizer", default="tokenizers/tinystories")
+parser.add_argument("-t", "--tokenizer", default="data/tinystories_merges.txt")
 # model paramters
 parser.add_argument("--context_length", type=int, default=512)
 parser.add_argument("--num_layers", type=int, default=4)
-parser.add_argument("--aspect_ratio", type=int, default=96, help="d_mode = num_layers*aspect_ratio")
+parser.add_argument("--aspect_ratio", type=int, default=96, help="d_model = num_layers*aspect_ratio")
 # optimization paramters
 parser.add_argument("--bs", type=int, default=32)
 parser.add_argument("--grad_accum_steps", type=int, default=1)
