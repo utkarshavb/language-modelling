@@ -7,9 +7,11 @@ requires-python = ">=3.12"
 dependencies = [
     "einops>=0.8.1",
     "jaxtyping>=0.3.5",
-    "numpy>=2.4.1",
+    "numpy>=2.4.1; sys_platform!='darwin' or platform_machine!='x86_64'",
+    "numpy>=1.26,<2; sys_platform=='darwin' or platform_machine=='x86_64'", # Intel Macs
     "tiktoken>=0.12.0",
-    "torch>=2.9.1",
+    "torch>=2.9.1; sys_platform!='darwin' or platform_machine!='x86_64'",
+    "torch~=2.2.2; sys_platform=='darwin' or platform_machine=='x86_64'", # Intel Macs
     "tqdm>=4.67.1",
     "wandb>=0.23.1",
 ]
@@ -21,3 +23,33 @@ build-backend = "uv_build"
 [tool.uv.build-backend]
 module-name = "base_model"
 module-root = ""
+
+# target torch to cuda 12.4 or CPU
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cu124", extra = "gpu" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+[project.optional-dependencies]
+cpu = [
+    "torch>=2.9.1",
+]
+gpu = [
+    "torch>=2.9.1",
+]
+
+[tool.uv]
+conflicts = [
+    [{ extra = "cpu" },{ extra = "gpu" }],
+]
