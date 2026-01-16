@@ -21,6 +21,7 @@ parser.add_argument("-t", "--tokenizer", default="data/tinystories_merges.txt")
 parser.add_argument("--context_length", type=int, default=512)
 parser.add_argument("--num_layers", type=int, default=4)
 parser.add_argument("--aspect_ratio", type=int, default=96, help="d_model = num_layers*aspect_ratio")
+parser.add_argument("--num_heads", type=int, default=4)
 # optimization paramters
 parser.add_argument("--bs", type=int, default=32)
 parser.add_argument("--grad_accum_steps", type=int, default=1)
@@ -30,8 +31,8 @@ parser.add_argument("--wd", type=float, default=0.0)
 parser.add_argument("--max_grad_norm", type=float, default=1.0)
 parser.add_argument("--betas", type=float, nargs=2, default=[0.9,0.95], help="The betas parameter for AdamW")
 # training horizon
-parser.add_argument("--max_steps", type=int, default=-1, help="When > 0, takes precedence over `training_tokens`")
-parser.add_argument("--training_tokens", type=int, default=327_680_000, help="bs*context_length*steps")
+parser.add_argument("--max_steps", type=int, default=-1, help="When > 0, takes precedence over `train_tokens`")
+parser.add_argument("--train_tokens", type=int, default=327_680_000, help="bs*context_length*steps")
 # eval parameters
 parser.add_argument("--eval_interval", type=int, default=100)
 parser.add_argument("--eval_tokens", type=int, default=524_288)
@@ -39,16 +40,7 @@ parser.add_argument("--save_interval", type=int, default=-1, help="-1: saves onl
 args = parser.parse_args()
 
 # ---------------various initializations---------------
-# tokenizer
-tkn_path = Path(args.tokenizer)
-tokenizer = load_tokenizer(tkn_path)
-vocab_size = tokenizer.n_vocab
-print(f"{vocab_size=:,}")
-
-# data
-data_path = Path(args.data_dir)
-train_data = np.load(data_path/"train.npy", mmap_mode='r')
-eval_data = np.load(data_path/"valid.npy", mmap_mode='r')
+print("----------Config----------\n")
 
 # device
 if torch.cuda.is_available():
@@ -57,35 +49,53 @@ elif torch.backends.mps.is_available():
     device = "mps"
 else:
     device = 'cpu'
-print(f"Using device: {device}")
+print(f"{device=}")
 
-# training related hyperparamters
-bs = args.bs
-context_length = args.context_length
+# tokenizer
+tkn_path = Path(args.tokenizer)
+tokenizer = load_tokenizer(tkn_path)
+vocab_size = tokenizer.n_vocab
+bs, context_length = args.bs, args.context_length
+
+# data
+data_path = Path(args.data_dir)
+train_data = np.load(data_path/"train.npy", mmap_mode='r')
+eval_data = np.load(data_path/"valid.npy", mmap_mode='r')
+
+# training horizon
 grad_accum_steps = args.grad_accum_steps
 tok_per_step = bs*grad_accum_steps*context_length
-print(f"Tokens per mini-batch: {tok_per_step:,}")
 if args.max_steps > 0:
     max_steps = args.max_steps
 else:
-    max_steps = args.training_tokens//tok_per_step
-training_tokens = tok_per_step*max_steps
-print(f"Total training tokens: {training_tokens:,}")
+    max_steps = args.train_tokens//tok_per_step
+train_tokens = tok_per_step*max_steps
+
 eval_steps = args.eval_tokens//tok_per_step
 ckpt_dir = Path(f"models/{args.run}")
 ckpt_dir.mkdir(parents=True, exist_ok=True)
+
+print("\n# Data")
+print(f"{vocab_size=:,}, {context_length=}, {bs=}")
+print(f"Tokens per mini-batch: {tok_per_step:,}")
+print(f"Total training tokens: {train_tokens:,}")
 
 # model
 num_layers = args.num_layers
 d_model = num_layers*args.aspect_ratio
 d_ff = 8*d_model//3
-num_heads = (d_model+127)//128  # ceil div
+num_heads = args.num_heads
+assert d_model%num_heads==0,  "`d_model` must be divisible by `num_heads`"
+
 model = TransformerLM(
     vocab_size, context_length, num_layers, d_model, d_ff, num_heads, device=device
 )
 num_params = sum(p.numel() for p in model.parameters())
+print("\n# Model")
+print(f"{num_layers=}, {d_model=}, {d_ff=}, {num_heads=}, d_h={d_model//num_heads}")
 print(f"Number of parameters: {num_params:,}")
-print(f"Tokens : params ratio: {training_tokens/num_params:.2f}")
+
+print(f"\nTokens to params ratio: {train_tokens/num_params:.2f}")
 
 # optimizer
 lr_min = 1e-4
@@ -95,10 +105,11 @@ optimizer = AdamW(model.parameters(), lr=lr_max, weight_decay=args.wd, betas=tup
 
 # wandb
 config = {
-    "num_layers":num_layers, "context_length":context_length, "bs":bs,
-    "grad_accum_steps":grad_accum_steps, "lr_max":lr_max, "wd":args.wd,
-    "warmup_ratio":args.warmup_ratio, "max_steps":max_steps,
-    "training_tokens":training_tokens, "eval_tokens":args.eval_tokens
+    "num_layers":num_layers, "aspect_ratio":args.aspect_ratio,
+    "num_heads":num_heads, "context_length":context_length,
+    "bs":bs, "grad_accum_steps":grad_accum_steps, "wd":args.wd,
+    "lr_max":lr_max, "warmup_ratio":args.warmup_ratio,
+    "max_steps":max_steps, "train_tokens":train_tokens
 }
 run = wandb.init(project="cs336", name=args.run, config=config)
 
@@ -117,7 +128,7 @@ def evaluate(data: npt.NDArray, model:torch.nn.Module, steps: int) -> float:
     return loss/steps
 
 # ---------------training loop---------------
-print("Starting training loop")
+print("\n----------Starting training loop----------\n")
 train_start = time.time()
 
 for step in range(1, max_steps+1):
