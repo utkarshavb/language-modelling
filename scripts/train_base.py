@@ -13,30 +13,31 @@ from base_model.training_utils import *
 parser = argparse.ArgumentParser(description="Base language model")
 parser.add_argument("--run", type=str, default="initial", help="wandb run name")
 parser.add_argument(
-    "-d", "--data_dir", default="data/tokenized_tinystories",
+    "-d", "--data-dir", default="data/tokenized_tinystories",
     help="Directory containing the tokenized training (train.npy) and validation (valid.npy) texts"
 )
 parser.add_argument("-t", "--tokenizer", default="data/tinystories_merges.txt")
 # model paramters
-parser.add_argument("--context_length", type=int, default=512)
-parser.add_argument("--num_layers", type=int, default=4)
-parser.add_argument("--aspect_ratio", type=int, default=96, help="d_model = num_layers*aspect_ratio")
-parser.add_argument("--num_heads", type=int, default=4)
+parser.add_argument("--context-length", type=int, default=512)
+parser.add_argument("--num-layers", type=int, default=4)
+parser.add_argument("--aspect-ratio", type=int, default=96, help="d_model = num_layers*aspect_ratio")
+parser.add_argument("--num-heads", type=int, default=4)
 # optimization paramters
 parser.add_argument("--bs", type=int, default=32)
-parser.add_argument("--grad_accum_steps", type=int, default=1)
-parser.add_argument("--lr_max", type=float, default=3e-2, help="The scheduler warms up to this lr")
-parser.add_argument("--warmup_ratio", type=float, default=0.01, help="Ratio of iterations for lr warmup")
+parser.add_argument("--grad-accum-steps", type=int, default=1)
+parser.add_argument("--lr-max", type=float, default=3e-2, help="The scheduler warms up to this lr")
+parser.add_argument("--warmup-ratio", type=float, default=0.01, help="Ratio of iterations for lr warmup")
 parser.add_argument("--wd", type=float, default=0.0)
-parser.add_argument("--max_grad_norm", type=float, default=1.0)
+parser.add_argument("--max-grad-norm", type=float, default=1.0)
 parser.add_argument("--betas", type=float, nargs=2, default=[0.9,0.95], help="The betas parameter for AdamW")
-# training horizon
-parser.add_argument("--max_steps", type=int, default=-1, help="When > 0, takes precedence over `train_tokens`")
-parser.add_argument("--train_tokens", type=int, default=327_680_000, help="bs*context_length*steps")
+# training horizon (only one is used, in this order)
+parser.add_argument("--max-steps", type=int, default=-1, help="-1 = disable")
+parser.add_argument("--target-flops", type=int, default=-1, help="-1 = disable")
+parser.add_argument("--train-tokens", type=int, default=327_680_000, help="bs*context_length*steps")
 # eval parameters
-parser.add_argument("--eval_interval", type=int, default=100)
-parser.add_argument("--eval_tokens", type=int, default=524_288)
-parser.add_argument("--save_interval", type=int, default=-1, help="-1: saves only at the end")
+parser.add_argument("--eval-interval", type=int, default=100)
+parser.add_argument("--eval-tokens", type=int, default=524_288)
+parser.add_argument("--save-interval", type=int, default=-1, help="-1 = saves only at the end")
 args = parser.parse_args()
 
 # ---------------various initializations---------------
@@ -52,8 +53,8 @@ else:
 print(f"{device=}")
 
 # tokenizer
-tkn_path = Path(args.tokenizer)
-tokenizer = load_tokenizer(tkn_path)
+tok_path = Path(args.tokenizer)
+tokenizer = load_tokenizer(tok_path)
 vocab_size = tokenizer.n_vocab
 bs, context_length = args.bs, args.context_length
 
@@ -76,7 +77,7 @@ ckpt_dir = Path(f"models/{args.run}")
 ckpt_dir.mkdir(parents=True, exist_ok=True)
 
 print("\n# Data")
-print(f"{vocab_size=:,}, {context_length=}, {bs=}")
+print(f"{vocab_size=:,}, {context_length=}, {bs=}, {grad_accum_steps=}")
 print(f"Tokens per mini-batch: {tok_per_step:,}")
 print(f"Total training tokens: {train_tokens:,}")
 
@@ -148,7 +149,7 @@ for step in range(1, max_steps+1):
         loss = loss/grad_accum_steps
         train_loss += loss.detach().item()
         loss.backward()
-
+    
     grad_norm = clip_gradient(model.parameters(), args.max_grad_norm)
     optimizer.step()
     optimizer.zero_grad()
