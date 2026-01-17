@@ -41,7 +41,7 @@ parser.add_argument("--save-interval", type=int, default=-1, help="-1 = saves on
 args = parser.parse_args()
 
 # ---------------various initializations---------------
-print("----------Config----------\n")
+print("----------Config----------")
 
 # device
 if torch.cuda.is_available():
@@ -72,7 +72,8 @@ else:
     max_steps = args.train_tokens//tok_per_step
 train_tokens = tok_per_step*max_steps
 
-eval_steps = args.eval_tokens//tok_per_step
+eval_tok_per_step = bs*context_length
+eval_steps = max(1, args.eval_tokens//eval_tok_per_step)
 ckpt_dir = Path(f"models/{args.run}")
 ckpt_dir.mkdir(parents=True, exist_ok=True)
 
@@ -82,18 +83,19 @@ print(f"Tokens per mini-batch: {tok_per_step:,}")
 print(f"Total training tokens: {train_tokens:,}")
 
 # model
+print("\n# Model")
 num_layers = args.num_layers
 d_model = num_layers*args.aspect_ratio
 d_ff = 8*d_model//3
 num_heads = args.num_heads
 assert d_model%num_heads==0,  "`d_model` must be divisible by `num_heads`"
+print(f"{num_layers=}, {d_model=}, {d_ff=}, {num_heads=}, d_h={d_model//num_heads}")
 
-model = TransformerLM(
+orig_model = TransformerLM(
     vocab_size, context_length, num_layers, d_model, d_ff, num_heads, device=device
 )
+model = compile_model(orig_model, device=device)
 num_params = sum(p.numel() for p in model.parameters())
-print("\n# Model")
-print(f"{num_layers=}, {d_model=}, {d_ff=}, {num_heads=}, d_h={d_model//num_heads}")
 print(f"Number of parameters: {num_params:,}")
 
 print(f"\nTokens to params ratio: {train_tokens/num_params:.2f}")
@@ -129,7 +131,7 @@ def evaluate(data: npt.NDArray, model:torch.nn.Module, steps: int) -> float:
     return loss/steps
 
 # ---------------training loop---------------
-print("\n----------Starting training loop----------\n")
+print("\n----------Starting training loop----------")
 train_start = time.time()
 
 for step in range(1, max_steps+1):

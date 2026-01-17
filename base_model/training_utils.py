@@ -1,6 +1,6 @@
 import os
 import numpy as np, torch
-from typing import Callable
+from typing import Callable, cast
 from collections.abc import Iterable
 import numpy.typing as npt
 from torch import Tensor
@@ -97,6 +97,19 @@ def load_checkpoint(src, model: torch.nn.Module, optimizer: torch.optim.Optimize
     model.load_state_dict(obj['model'])
     optimizer.load_state_dict(obj['optimizer'])
     return obj['iteration']
+
+def compile_model(model: torch.nn.Module, device) -> torch.nn.Module:
+    dummy_ids = torch.zeros((1,2), dtype=torch.long, device=device)
+    try:
+        compiled = torch.compile(model, dynamic=False)
+        _ = compiled(dummy_ids)
+        print("Compiled the model with inductor backend")
+    except Exception as e:
+        compiled = torch.compile(model, dynamic=False, backend="aot_eager")
+        print("torch.compile failed, using 'aot_eager' backend")
+        print(f"Reason: {type(e).__name__}: {e}")
+    compiled = cast(torch.nn.Module, compiled)
+    return compiled
 
 @torch.inference_mode()
 def generate(
