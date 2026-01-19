@@ -32,8 +32,7 @@ parser.add_argument("--max-grad-norm", type=float, default=1.0)
 parser.add_argument("--betas", type=float, nargs=2, default=[0.9,0.95], help="The betas parameter for AdamW")
 # training horizon (only one is used, in this order)
 parser.add_argument("--max-steps", type=int, default=-1, help="-1 = disable")
-parser.add_argument("--target-flops", type=int, default=-1, help="-1 = disable")
-parser.add_argument("--train-tokens", type=int, default=327_680_000, help="bs*context_length*steps")
+parser.add_argument("--target-flops", type=float, default=3e18, help="-1 = disable")
 # eval parameters
 parser.add_argument("--eval-interval", type=int, default=100)
 parser.add_argument("--eval-tokens", type=int, default=524_288)
@@ -52,35 +51,21 @@ else:
     device = 'cpu'
 print(f"{device=}")
 
-# tokenizer
-tok_path = Path(args.tokenizer)
-tokenizer = load_tokenizer(tok_path)
-vocab_size = tokenizer.n_vocab
-bs, context_length = args.bs, args.context_length
-
 # data
 data_path = Path(args.data_dir)
 train_data = np.load(data_path/"train.npy", mmap_mode='r')
 eval_data = np.load(data_path/"valid.npy", mmap_mode='r')
 
-# training horizon
-grad_accum_steps = args.grad_accum_steps
-tok_per_step = bs*grad_accum_steps*context_length
-if args.max_steps > 0:
-    max_steps = args.max_steps
-else:
-    max_steps = args.train_tokens//tok_per_step
-train_tokens = tok_per_step*max_steps
-
-eval_tok_per_step = bs*context_length
-eval_steps = max(1, args.eval_tokens//eval_tok_per_step)
-ckpt_dir = Path(f"models/{args.run}")
-ckpt_dir.mkdir(parents=True, exist_ok=True)
-
+# tokenizer
+tok_path = Path(args.tokenizer)
+tokenizer = load_tokenizer(tok_path)
 print("\n# Data")
+vocab_size = tokenizer.n_vocab
+bs, context_length = args.bs, args.context_length
+grad_accum_steps = args.grad_accum_steps
 print(f"{vocab_size=:,}, {context_length=}, {bs=}, {grad_accum_steps=}")
+tok_per_step = bs*grad_accum_steps*context_length
 print(f"Tokens per mini-batch: {tok_per_step:,}")
-print(f"Total training tokens: {train_tokens:,}")
 
 # model
 print("\n# Model")
@@ -97,6 +82,25 @@ orig_model = TransformerLM(
 model = compile_model(orig_model, device=device)
 num_params = sum(p.numel() for p in model.parameters())
 print(f"Number of parameters: {num_params:,}")
+num_flops_per_tok = orig_model.estimate_flops(context_length)
+print(f"Estimated FLOPs per token: {num_flops_per_tok:e}")
+
+# training horizon
+print("\n# Training Horizon")
+if args.max_steps > 0:
+    max_steps = args.max_steps
+    print(f"Provided number of iterations: {max_steps:,}")
+else:
+    max_steps = round(args.target_flops/(num_flops_per_tok*tok_per_step))
+    print(f"Calculated number of iterations from target FLOPs: {max_steps:,}")
+train_tokens = tok_per_step*max_steps
+print(f"Total training tokens: {train_tokens:e}")
+print(f"Total training FLOPs estimate: {(num_flops_per_tok*train_tokens):e}")
+
+eval_tok_per_step = bs*context_length
+eval_steps = max(1, args.eval_tokens//eval_tok_per_step)
+ckpt_dir = Path(f"models/{args.run}")
+ckpt_dir.mkdir(parents=True, exist_ok=True)
 
 print(f"\nTokens to params ratio: {train_tokens/num_params:.2f}")
 

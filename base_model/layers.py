@@ -57,15 +57,15 @@ class RotaryPositionalEmbedding(nn.Module):
         super().__init__()
         ps = torch.arange(max_seq_len, device=device)
         inv_freq = 1 / theta**(torch.arange(0, d_k, 2, device=device)/d_k)
-        angles = einsum(ps, inv_freq, "i, j -> i j")
+        angles = einsum(ps, inv_freq, "i, j -> i j")[..., None]
         self.register_buffer('cos_cached', angles.cos(), persistent=False)
         self.register_buffer('sin_cached', angles.sin(), persistent=False)
     
     def forward(
         self, x: Float[Tensor, "... L d_k"], token_positions: Int[Tensor, "... L"]
     ) -> Float[Tensor, "... L d_k"]:
-        cos = self.cos_cached[token_positions][..., None]    # pyright: ignore[reportIndexIssue] # (..., seq_len, d_k//2, 1)
-        sin = self.sin_cached[token_positions][..., None] # pyright: ignore[reportIndexIssue]
+        cos = self.cos_cached[token_positions] # pyright: ignore[reportIndexIssue]
+        sin = self.sin_cached[token_positions] # pyright: ignore[reportIndexIssue]
         x = rearrange(x, "... (d_k2 t) -> ... d_k2 t", t=2)
         x1, x2 = x.unbind(dim=-1)
         x_rot = rearrange([-x2, x1], "t ... d_k2 -> ... d_k2 t")
@@ -144,3 +144,23 @@ class TransformerLM(nn.Module):
     def forward(self, ids: Int[Tensor, "... L"]) -> Float[Tensor, "... L vocab_size"]:
         x = self.layers(self.token_embeddings(ids))
         return self.lm_head(self.ln_final(x))
+    
+    def estimate_flops(self, seq_len: int) -> int:
+        """
+        Returns the estimated flops per token for the model.
+        Dense matmul FLOPs (forward pass):
+            MHSA: 2*4*d_model^2 (QKV projection + Output projection) per layer
+            SwiGLU: 2*3*d_model*d_ff (W1, W2, W3) per layer
+            lm head: 2*d_model*vocab_size
+        Attention FLOPs (forward pass):
+            QK^T is (L, d_k) @ (d_k, L) and Attn@V is (L, L) @ (L, d_k)
+            This costs 4*L*d_model per layer
+        Total training FLOPs: 3*(total forward FLOPs)
+        """
+        d_model, vocab_size = self.token_embeddings.weight.size()
+        num_layers = len(self.layers)
+        d_ff = self.layers[0].ffn.w1.weight.size(0) # type: ignore
+        fwd_dense = 2*(4*d_model**2 + 3*d_model*d_ff)*num_layers + 2*d_model*vocab_size
+        fwd_attn = 4*seq_len*d_model*num_layers
+        num_flops_per_tok = 3*(fwd_dense + fwd_attn)
+        return num_flops_per_tok
