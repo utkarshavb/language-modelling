@@ -59,16 +59,16 @@ def cosine_schedule_lr(it, lr_max, lr_min, warmup_iters, cosine_iters):
         return lr_min
 
 def clip_gradient(params: Iterable[Tensor], max_norm, eps=1e-6):
+    """Clips all gradients to not exceed `max_norm`; also returns the unclipped norm"""
     norms = [p.grad.norm() for p in params if p.grad is not None]
     if not norms:
         return
     total_norm = torch.stack(norms).norm()
-    if total_norm < max_norm:
-        return total_norm
-    for p in params:
-        if p.grad is not None:
-            p.grad.mul_(max_norm/(total_norm+eps))
-    return max_norm
+    if total_norm > max_norm:
+        for p in params:
+            if p.grad is not None:
+                p.grad.mul_(max_norm/(total_norm+eps))
+    return total_norm
 
 def get_batch(
         data: npt.NDArray, bs, context_length, dtype=None, device=None
