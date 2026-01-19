@@ -48,8 +48,9 @@ if torch.cuda.is_available():
 elif torch.backends.mps.is_available():
     device = "mps"
 else:
-    device = 'cpu'
+    device = "cpu"
 print(f"{device=}")
+use_autocast = device=="cuda"
 
 # data
 data_path = Path(args.data_dir)
@@ -150,8 +151,9 @@ for step in range(1, max_steps+1):
         ids, targets = get_batch(
             train_data, bs, context_length, dtype=torch.long, device=device
         )
-        logits = model(ids)
-        loss = cross_entropy(logits, targets)
+        with torch.amp.autocast(device_type=device, dtype=torch.bfloat16, enabled=use_autocast):
+            logits = model(ids)
+            loss = cross_entropy(logits, targets)
         loss = loss/grad_accum_steps
         train_loss += loss.detach().item()
         loss.backward()
@@ -170,7 +172,8 @@ for step in range(1, max_steps+1):
 
     if step%args.eval_interval == 0:
         eval_start = time.time()
-        eval_loss = evaluate(eval_data, model, eval_steps)
+        with torch.amp.autocast(device_type=device, dtype=torch.bfloat16, enabled=use_autocast):
+            eval_loss = evaluate(eval_data, model, eval_steps)
         eval_time = time.time()-eval_start
         print(f"eval_loss: {eval_loss:.3f} | dt: {eval_time:.2f}s")
         log["eval/loss"] = eval_loss
