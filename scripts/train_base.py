@@ -32,7 +32,8 @@ parser.add_argument("--max-grad-norm", type=float, default=1.0)
 parser.add_argument("--betas", type=float, nargs=2, default=[0.9,0.95], help="The betas parameter for AdamW")
 # training horizon (only one is used, in this order)
 parser.add_argument("--max-steps", type=int, default=-1, help="-1 = disable")
-parser.add_argument("--target-flops", type=float, default=3e18, help="-1 = disable")
+parser.add_argument("--target-flops", type=float, default=-1, help="-1 = disable")
+parser.add_argument("--data-param-ratio", type=float, default=20, help="-1 = disable")
 # eval parameters
 parser.add_argument("--eval-interval", type=int, default=100)
 parser.add_argument("--eval-tokens", type=int, default=524_288)
@@ -91,24 +92,30 @@ print("\n# Training Horizon")
 if args.max_steps > 0:
     max_steps = args.max_steps
     print(f"Provided number of iterations: {max_steps:,}")
-else:
+elif args.target_flops > 0:
     max_steps = round(args.target_flops/(num_flops_per_tok*tok_per_step))
     print(f"Calculated number of iterations from target FLOPs: {max_steps:,}")
+elif args.data_param_ratio > 0:
+    max_steps = (args.data_param_ratio*num_params)//tok_per_step
+    print(f"Calculated number of iterations from the data param ratio: {max_steps:,}")
+else:
+    raise ValueError("No training horizon specified")
 train_tokens = tok_per_step*max_steps
 print(f"Total training tokens: {train_tokens:e}")
 print(f"Total training FLOPs estimate: {(num_flops_per_tok*train_tokens):e}")
+print(f"\nTokens to params ratio: {train_tokens/num_params:.2f}")
 
 eval_tok_per_step = bs*context_length
 eval_steps = max(1, args.eval_tokens//eval_tok_per_step)
 ckpt_dir = Path(f"models/{args.run}")
 ckpt_dir.mkdir(parents=True, exist_ok=True)
 
-print(f"\nTokens to params ratio: {train_tokens/num_params:.2f}")
-
 # optimizer
+print("\n# Optimization")
 lr_min = 1e-4
 lr_max = args.lr_max
 warmup_iters = int(max_steps*args.warmup_ratio)
+print(f"{lr_min=:e}, {lr_max=:e}, {warmup_iters=:,}, wd={args.wd:e}, max_grad_norm={args.max_grad_norm}")
 optimizer = AdamW(model.parameters(), lr=lr_max, weight_decay=args.wd, betas=tuple(args.betas))
 
 # wandb
@@ -136,7 +143,7 @@ def evaluate(data: npt.NDArray, model:torch.nn.Module, steps: int) -> float:
     return loss/steps
 
 # ---------------training loop---------------
-print("\n----------Starting training loop----------")
+print("\n----------Training loop----------")
 train_start = time.time()
 
 for step in range(1, max_steps+1):
@@ -186,5 +193,5 @@ for step in range(1, max_steps+1):
 
 save_checkpoint(model, optimizer, max_steps, ckpt_dir/str(max_steps))
 tot_time = time.time()-train_start
-print(f"Training run complete! Total time taken: {tot_time/60:,} minutes")
+print(f"\nTraining run complete! Total time taken: {tot_time/60:,} minutes")
 run.finish()
