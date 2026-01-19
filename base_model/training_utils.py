@@ -98,18 +98,25 @@ def load_checkpoint(src, model: torch.nn.Module, optimizer: torch.optim.Optimize
     optimizer.load_state_dict(obj['optimizer'])
     return obj['iteration']
 
-def compile_model(model: torch.nn.Module, device) -> torch.nn.Module:
-    dummy_ids = torch.zeros((1,2), dtype=torch.long, device=device)
+def compile_model(model: torch.nn.Module, bs, seq_len, device) -> torch.nn.Module:
+    dummy_ids = torch.zeros((bs,seq_len), dtype=torch.long, device=device)
     try:
         compiled = torch.compile(model, dynamic=False)
         _ = compiled(dummy_ids)
-        print("Compiled the model with inductor backend")
+        print("Compiled the model with Inductor backend")
+        return cast(torch.nn.Module, compiled)
     except Exception as e:
+        print("Inductor compile failed; trying aot_eager")
+        print(f"Reason: {type(e).__name__}: {str(e).replace('\n','')}")
+    try:
         compiled = torch.compile(model, dynamic=False, backend="aot_eager")
-        print("torch.compile failed, using 'aot_eager' backend")
-        print(f"Reason: {type(e).__name__}: {e}")
-    compiled = cast(torch.nn.Module, compiled)
-    return compiled
+        _ = compiled(dummy_ids)
+        print("aot_eager compilation successful!")
+        return cast(torch.nn.Module, compiled)
+    except Exception as e:
+        print("aot_eager compile failed; falling back to eager")
+        print(f"Reason: {type(e).__name__}: {str(e).replace('\n','')}")
+    return model
 
 @torch.inference_mode()
 def generate(

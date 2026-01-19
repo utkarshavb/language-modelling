@@ -80,7 +80,7 @@ print(f"{num_layers=}, {d_model=}, {d_ff=}, {num_heads=}, d_h={d_model//num_head
 orig_model = TransformerLM(
     vocab_size, context_length, num_layers, d_model, d_ff, num_heads, device=device
 )
-model = compile_model(orig_model, device=device)
+model = compile_model(orig_model, bs=bs, seq_len=context_length, device=device)
 num_params = sum(p.numel() for p in model.parameters())
 print(f"Number of parameters: {num_params:,}")
 num_flops_per_tok = orig_model.estimate_flops(context_length)
