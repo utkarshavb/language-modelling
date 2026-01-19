@@ -133,16 +133,16 @@ class TransformerLM(nn.Module):
     ):
         super().__init__()
         self.token_embeddings = Embedding(vocab_size, d_model, dtype=dtype, device=device)
-        self.layers = nn.Sequential(
-            *[TransformerBlock(
-                d_model, d_ff, num_heads, max_seq_len=context_length, theta=theta, dtype=dtype, device=device
-            ) for _ in range(num_layers)]
-        )
+        self.layers = [TransformerBlock(
+            d_model, d_ff, num_heads, max_seq_len=context_length, theta=theta, dtype=dtype, device=device
+        ) for _ in range(num_layers)]
         self.ln_final = RMSNorm(d_model, dtype=dtype, device=device)
         self.lm_head = Linear(d_model, vocab_size, dtype=dtype, device=device)
 
     def forward(self, ids: Int[Tensor, "... L"]) -> Float[Tensor, "... L vocab_size"]:
-        x = self.layers(self.token_embeddings(ids))
+        x = self.token_embeddings(ids)
+        for layer in self.layers:
+            x = layer(x)
         return self.lm_head(self.ln_final(x))
     
     def estimate_flops(self, seq_len: int) -> int:
@@ -159,7 +159,7 @@ class TransformerLM(nn.Module):
         """
         d_model, vocab_size = self.token_embeddings.weight.size()
         num_layers = len(self.layers)
-        d_ff = self.layers[0].ffn.w1.weight.size(0) # type: ignore
+        d_ff = self.layers[0].ffn.w1.weight.size(0)
         fwd_dense = 2*(4*d_model**2 + 3*d_model*d_ff)*num_layers + 2*d_model*vocab_size
         fwd_attn = 4*seq_len*d_model*num_layers
         num_flops_per_tok = 3*(fwd_dense + fwd_attn)
