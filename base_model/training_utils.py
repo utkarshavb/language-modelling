@@ -43,9 +43,8 @@ class AdamW(torch.optim.Optimizer):
                 m.mul_(beta1).add_(grad, alpha=(1-beta1))
                 v.mul_(beta2).addcmul_(grad, grad, value=(1-beta2))
                 lr_ = g['lr'] * ((1-beta2**t)**0.5 / (1-beta1**t))
-                p.mul_(1-g['lr']*g['wd'])
-                p.addcdiv_(m, v.sqrt().add(g['eps']), value=-lr_)
-                # p.mul_(1-g['lr']*g['wd'])
+                p.data *= (1 - g['lr']*g['wd'])
+                p.data -= lr_ * m / (v.sqrt()+g['eps'])
         
         return loss
 
@@ -60,15 +59,12 @@ def cosine_schedule_lr(it, lr_max, lr_min, warmup_iters, cosine_iters):
 
 def clip_gradient(params: Iterable[Tensor], max_norm, eps=1e-6):
     """Clips all gradients to not exceed `max_norm`; also returns the unclipped norm"""
-    norms = [p.grad.norm() for p in params if p.grad is not None]
-    if not norms:
-        return
-    total_norm = torch.stack(norms).norm()
-    if total_norm > max_norm:
-        for p in params:
-            if p.grad is not None:
-                p.grad.mul_(max_norm/(total_norm+eps))
-    return total_norm
+    grads = [p.grad for p in params if p.grad is not None]
+    norm = sum((g**2).sum() for g in grads)**0.5
+    clip_coef = min(1, max_norm/(norm+eps))
+    for g in grads:
+        g *= clip_coef
+    return norm
 
 def get_batch(
         data: npt.NDArray, bs, context_length, dtype=None, device=None
@@ -117,10 +113,3 @@ def compile_model(model: torch.nn.Module, bs, seq_len, device) -> torch.nn.Modul
         print("aot_eager compile failed; falling back to eager")
         print(f"Reason: {type(e).__name__}: {str(e).replace('\n','')}")
     return model
-
-@torch.inference_mode()
-def generate(
-    model: torch.nn.Module, ids: Int[Tensor, "... L"], endoftext_id: int,
-    max_tokens: int|None=None, p: float=1.0, temperature: float=1.0, 
-):
-    pass

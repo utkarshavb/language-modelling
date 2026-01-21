@@ -33,7 +33,7 @@ parser.add_argument("--betas", type=float, nargs=2, default=[0.9,0.95], help="Th
 # training horizon (only one is used, in this order)
 parser.add_argument("--max-steps", type=int, default=-1, help="-1 = disable")
 parser.add_argument("--target-flops", type=float, default=-1, help="-1 = disable")
-parser.add_argument("--data-param-ratio", type=float, default=20, help="-1 = disable")
+parser.add_argument("--data-param-ratio", type=int, default=20, help="-1 = disable")
 # eval parameters
 parser.add_argument("--eval-interval", type=int, default=100)
 parser.add_argument("--eval-tokens", type=int, default=524_288)
@@ -52,6 +52,7 @@ else:
     device = "cpu"
 print(f"{device=}")
 use_autocast = device=="cuda"
+autocast_ctx = torch.amp.autocast(device_type=device, dtype=torch.bfloat16, enabled=use_autocast)
 
 # data
 data_path = Path(args.data_dir)
@@ -84,7 +85,7 @@ orig_model = TransformerLM(
 model = compile_model(orig_model, bs=bs, seq_len=context_length, device=device)
 num_params = sum(p.numel() for p in model.parameters())
 print(f"Number of parameters: {num_params:,}")
-num_flops_per_tok = orig_model.estimate_flops(context_length)
+num_flops_per_tok = orig_model.estimate_flops()
 print(f"Estimated FLOPs per token: {num_flops_per_tok:e}")
 
 # training horizon
@@ -115,7 +116,7 @@ print("\n# Optimization")
 lr_min = 1e-4
 lr_max = args.lr_max
 warmup_iters = int(max_steps*args.warmup_ratio)
-print(f"{lr_min=:e}, {lr_max=:e}, {warmup_iters=:,}, wd={args.wd:e}, max_grad_norm={args.max_grad_norm}")
+print(f"{lr_min=:.4f}, {lr_max=:.4f}, {warmup_iters=:,}, wd={args.wd:.4f}, max_grad_norm={args.max_grad_norm}")
 optimizer = AdamW(model.parameters(), lr=lr_max, weight_decay=args.wd, betas=tuple(args.betas))
 
 # wandb
@@ -158,7 +159,7 @@ for step in range(1, max_steps+1):
         ids, targets = get_batch(
             train_data, bs, context_length, dtype=torch.long, device=device
         )
-        with torch.amp.autocast(device_type=device, dtype=torch.bfloat16, enabled=use_autocast):
+        with autocast_ctx:
             logits = model(ids)
             loss = cross_entropy(logits, targets)
         loss = loss/grad_accum_steps
@@ -179,7 +180,7 @@ for step in range(1, max_steps+1):
 
     if step%args.eval_interval == 0:
         eval_start = time.time()
-        with torch.amp.autocast(device_type=device, dtype=torch.bfloat16, enabled=use_autocast):
+        with autocast_ctx:
             eval_loss = evaluate(eval_data, model, eval_steps)
         eval_time = time.time()-eval_start
         print(f"eval_loss: {eval_loss:.3f} | dt: {eval_time:.2f}s")

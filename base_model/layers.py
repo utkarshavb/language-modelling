@@ -128,14 +128,18 @@ class TransformerBlock(nn.Module):
 
 class TransformerLM(nn.Module):
     def __init__(
-        self, vocab_size, context_length, num_layers, d_model,
-        d_ff, num_heads, theta=1e5, dtype=None, device=None
+        self, vocab_size: int, context_length: int, num_layers: int, d_model: int,
+        d_ff: int, num_heads: int, rope_theta: int=100_000, dtype=None, device=None
     ):
+        self.config: dict[str, int] = dict(
+            vocab_size=vocab_size, context_length=context_length, d_model=d_model,
+            d_ff=d_ff, num_layers=num_layers, num_heads=num_heads, rope_theta=rope_theta 
+        )
         super().__init__()
         self.token_embeddings = Embedding(vocab_size, d_model, dtype=dtype, device=device)
-        self.layers = [TransformerBlock(
-            d_model, d_ff, num_heads, max_seq_len=context_length, theta=theta, dtype=dtype, device=device
-        ) for _ in range(num_layers)]
+        self.layers = nn.ModuleList([TransformerBlock(
+            d_model, d_ff, num_heads, context_length, theta=rope_theta, dtype=dtype, device=device
+        ) for _ in range(num_layers)])
         self.ln_final = RMSNorm(d_model, dtype=dtype, device=device)
         self.lm_head = Linear(d_model, vocab_size, dtype=dtype, device=device)
 
@@ -145,22 +149,63 @@ class TransformerLM(nn.Module):
             x = layer(x)
         return self.lm_head(self.ln_final(x))
     
-    def estimate_flops(self, seq_len: int) -> int:
+    def estimate_flops(self) -> int:
         """
-        Returns the estimated flops per token for the model.
-        Dense matmul FLOPs (forward pass):
-            MHSA: 2*4*d_model^2 (QKV projection + Output projection) per layer
-            SwiGLU: 2*3*d_model*d_ff (W1, W2, W3) per layer
-            lm head: 2*d_model*vocab_size
-        Attention FLOPs (forward pass):
+        Returns the estimated flops per token for the model (forward + backward)
+        Dense matmul FLOPs:
+            MHSA: 6*4*d_model^2 (QKV projection + Output projection) per layer
+            SwiGLU: 6*3*d_model*d_ff (W1, W2, W3) per layer
+            lm head: 6*d_model*vocab_size
+        Attention FLOPs:
             QK^T is (L, d_k) @ (d_k, L) and Attn@V is (L, L) @ (L, d_k)
-            This costs 4*L*d_model per layer
-        Total training FLOPs: 3*(total forward FLOPs)
+            This costs 12*L*d_model per layer
         """
-        d_model, vocab_size = self.token_embeddings.weight.size()
-        num_layers = len(self.layers)
-        d_ff = self.layers[0].ffn.w1.weight.size(0)
-        fwd_dense = 2*(4*d_model**2 + 3*d_model*d_ff)*num_layers + 2*d_model*vocab_size
-        fwd_attn = 4*seq_len*d_model*num_layers
-        num_flops_per_tok = 3*(fwd_dense + fwd_attn)
-        return num_flops_per_tok
+        d_model, vocab_size = self.config['d_model'], self.config['vocab_size']
+        num_layers, d_ff = self.config['num_layers'], self.config['d_ff']
+        seq_len = self.config['context_length']
+
+        ffn = 6 * num_layers * (3*d_model*d_ff)
+        mhsa_dense = 6 * num_layers * (4*d_model**2)
+        mhsa_attn = 12 * seq_len * d_model * num_layers
+        lm_head = 6*d_model*vocab_size
+        
+        return (ffn + mhsa_dense + mhsa_attn + lm_head)
+    
+    @torch.inference_mode()
+    def generate(
+            self, ids: Int[Tensor, "bs L"], max_new_tokens: int, p: float=1.0,
+            temperature: float=1.0, eos_tok_id: int|None=None
+        ) -> Int[Tensor, "bs max_new_tokens"]:
+        assert 0<p<=1.0
+        orig_seq_len = ids.size(-1)
+        context_len = self.config["context_length"]
+
+        # track which sequences are still generating
+        alive = torch.ones(ids.shape[:-1], dtype=torch.bool, device=ids.device)
+
+        for _ in range(max_new_tokens):
+            if eos_tok_id is not None and not alive.any():
+                break
+
+            # crop the ids to fit the context length of the model
+            inp = ids[..., -context_len:] if ids.size(-1)>context_len else ids
+            logits: Float[Tensor, "... vocab_size"] = self(inp)[..., -1, :]
+            logits /= temperature
+            probs = softmax(logits, dim=-1)
+
+            # select minimum probs such that sum(probs)>=p
+            sorted_probs, sorted_idxs = probs.sort(descending=True)
+            mask: Bool[Tensor, "bs context_len"] = sorted_probs.cumsum(dim=-1) <= p
+            mask[..., 0] = True    # keep atleast one token
+            sorted_probs *= mask
+            choices: Int[Tensor, "bs 1"] = torch.multinomial(sorted_probs, 1)
+            next_tok_ids: Int[Tensor, "bs 1"] = sorted_idxs.gather(dim=-1, index=choices)
+
+            if eos_tok_id is not None:
+                eos = torch.full_like(next_tok_ids, eos_tok_id)
+                next_tok_ids = torch.where(alive[...,None], next_tok_ids, eos)
+                # update alive
+                alive = alive & (next_tok_ids.squeeze()!=eos_tok_id)
+
+            ids = torch.cat((ids, next_tok_ids), dim=-1)
+        return ids[..., orig_seq_len:]
