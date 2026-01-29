@@ -19,13 +19,13 @@ parser.add_argument(
 parser.add_argument("-t", "--tokenizer", default="data/tinystories_merges.txt")
 # model paramters
 parser.add_argument("--context-length", type=int, default=512)
-parser.add_argument("--num-layers", type=int, default=4)
-parser.add_argument("--aspect-ratio", type=int, default=96, help="d_model = num_layers*aspect_ratio")
-parser.add_argument("--num-heads", type=int, default=4)
+parser.add_argument("--num-layers", type=int, default=12)
+parser.add_argument("--aspect-ratio", type=int, default=64, help="d_model = num_layers*aspect_ratio")
+parser.add_argument("--num-heads", type=int, default=12)
 # optimization paramters
-parser.add_argument("--bs", type=int, default=32)
+parser.add_argument("--bs", type=int, default=2)
 parser.add_argument("--grad-accum-steps", type=int, default=1)
-parser.add_argument("--lr-max", type=float, default=3e-2, help="The scheduler warms up to this lr")
+parser.add_argument("--lr-max", type=float, default=3e-2, help="The scheduler warms-up to this lr")
 parser.add_argument("--warmup-ratio", type=float, default=0.01, help="Ratio of iterations for lr warmup")
 parser.add_argument("--wd", type=float, default=0.0)
 parser.add_argument("--max-grad-norm", type=float, default=1.0)
@@ -74,7 +74,7 @@ print(f"Tokens per mini-batch: {tok_per_step:,}")
 print("\n# Model")
 num_layers = args.num_layers
 d_model = num_layers*args.aspect_ratio
-d_ff = 8*d_model//3
+d_ff = 4*d_model
 num_heads = args.num_heads
 assert d_model%num_heads==0,  "`d_model` must be divisible by `num_heads`"
 print(f"{num_layers=}, {d_model=}, {d_ff=}, {num_heads=}, d_h={d_model//num_heads}")
@@ -116,14 +116,16 @@ print("\n# Optimization")
 lr_min = 1e-4
 lr_max = args.lr_max
 warmup_iters = int(max_steps*args.warmup_ratio)
-print(f"{lr_min=:.4f}, {lr_max=:.4f}, {warmup_iters=:,}, wd={args.wd:.4f}, max_grad_norm={args.max_grad_norm}")
-optimizer = AdamW(model.parameters(), lr=lr_max, weight_decay=args.wd, betas=tuple(args.betas))
+wd = args.wd
+max_grad_norm = args.max_grad_norm
+print(f"{lr_min=:.4f}, {lr_max=:.4f}, {warmup_iters=:,}, {wd=:.4f}, {max_grad_norm=}")
+optimizer = AdamW(model.parameters(), lr=lr_max, weight_decay=wd, betas=tuple(args.betas))
 
 # wandb
 config = {
     "num_layers":num_layers, "aspect_ratio":args.aspect_ratio,
     "num_heads":num_heads, "context_length":context_length,
-    "bs":bs, "grad_accum_steps":grad_accum_steps, "wd":args.wd,
+    "bs":bs, "grad_accum_steps":grad_accum_steps, "wd":wd,
     "lr_max":lr_max, "warmup_ratio":args.warmup_ratio,
     "max_steps":max_steps, "train_tokens":train_tokens
 }
@@ -135,9 +137,7 @@ def evaluate(data: npt.NDArray, model:torch.nn.Module, steps: int) -> float:
     model.eval()
     loss = 0
     for _ in trange(steps, desc="Evaluating", leave=False):
-        ids, targets = get_batch(
-            data, bs, context_length, dtype=torch.long, device=device
-        )
+        ids, targets = get_batch(data, bs, context_length, device=device)
         logits = model(ids)
         loss += cross_entropy(logits, targets).item()
     model.train()
@@ -156,9 +156,7 @@ for step in range(1, max_steps+1):
     # gradient accumulation
     train_loss = 0
     for micro_step in range(grad_accum_steps):
-        ids, targets = get_batch(
-            train_data, bs, context_length, dtype=torch.long, device=device
-        )
+        ids, targets = get_batch(train_data, bs, context_length, device=device)
         with autocast_ctx:
             logits = model(ids)
             loss = cross_entropy(logits, targets)
@@ -166,14 +164,14 @@ for step in range(1, max_steps+1):
         train_loss += loss.detach().item()
         loss.backward()
     
-    grad_norm = clip_gradient(model.parameters(), args.max_grad_norm)
+    grad_norm = clip_gradient(model.parameters(), max_grad_norm)
     optimizer.step()
-    optimizer.zero_grad()
+    optimizer.zero_grad(set_to_none=True)
 
     # logging
     dt = time.time()-t0
     tok_per_sec = tok_per_step/dt
-    print(f"step {step}/{max_steps} | loss: {train_loss:.4f} | grad_norm: {grad_norm:.3f} | lr: {lr:.3f} | dt: {dt:.2f}s | tok/sec: {tok_per_sec:.2f}")
+    print(f"step {step}/{max_steps} | {train_loss=:.4f} | {grad_norm=:.3f} | {lr=:.3f} | {dt=:.2f}s | {tok_per_sec=:.2f}")
     log = {
         "train/loss":train_loss, "train/grad_norm":grad_norm, "train/lr":lr, "train/dt":dt
     }

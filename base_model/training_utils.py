@@ -67,7 +67,7 @@ def clip_gradient(params: Iterable[Tensor], max_norm, eps=1e-6):
     return norm
 
 def get_batch(
-        data: npt.NDArray, bs, context_length, dtype=None, device=None
+        data: npt.NDArray, bs, context_length, dtype=torch.long, device=None
 ) -> tuple[Int[Tensor, "bs context_length"], Int[Tensor, "bs context_length"]]:
     start_idxs = np.random.randint(data.shape[0]-context_length, size=bs)
     idxs = start_idxs[:, None] + np.arange(context_length)
