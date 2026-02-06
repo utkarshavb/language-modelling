@@ -9,7 +9,7 @@ from base_model.tiktoken_port import load_tokenizer
 from base_model.layers import TransformerLM
 from base_model.training_utils import *
 
-# ---------------command-line arguments---------------
+# ----------------------------------------------------------------------------------------------------
 parser = argparse.ArgumentParser(description="Base language model")
 parser.add_argument("--run", type=str, default="initial", help="wandb run name")
 parser.add_argument(
@@ -40,7 +40,7 @@ parser.add_argument("--eval-tokens", type=int, default=524_288)
 parser.add_argument("--save-interval", type=int, default=-1, help="-1 = saves only at the end")
 args = parser.parse_args()
 
-# ---------------various initializations---------------
+# ----------------------------------------------------------------------------------------------------
 print("----------Config----------")
 
 # device
@@ -51,8 +51,8 @@ elif torch.backends.mps.is_available():
 else:
     device = "cpu"
 print(f"{device=}")
-use_autocast = device=="cuda"
-autocast_ctx = torch.amp.autocast(device_type=device, dtype=torch.bfloat16, enabled=use_autocast)
+use_amp = device=="cuda"
+autocast_ctx = torch.amp.autocast(device_type=device, dtype=torch.bfloat16, enabled=use_amp)
 
 # data
 data_path = Path(args.data_dir)
@@ -131,7 +131,7 @@ config = {
 }
 run = wandb.init(project="cs336", name=args.run, config=config)
 
-# ---------------evaluation loop---------------
+# ----------------------------------------------------------------------------------------------------
 @torch.inference_mode()
 def evaluate(data: npt.NDArray, model:torch.nn.Module, steps: int) -> float:
     model.eval()
@@ -143,7 +143,7 @@ def evaluate(data: npt.NDArray, model:torch.nn.Module, steps: int) -> float:
     model.train()
     return loss/steps
 
-# ---------------training loop---------------
+# ----------------------------------------------------------------------------------------------------
 print("\n----------Training loop----------")
 train_start = time.time()
 

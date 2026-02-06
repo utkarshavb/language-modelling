@@ -81,11 +81,13 @@ def scaled_dot_product_attention(
     V: Float[Tensor, "bs ... values d_v"], mask: Bool[Tensor, "queries keys"] | None = None
 ) -> Float[Tensor, "... queries d_v"]:
     d_k = Q.size(-1)
-    pre_softmax = einsum(Q, K, "... queries d_k, ... keys d_k -> ... queries keys")/d_k**0.5
+    attn_weights = einsum(Q, K, "... queries d_k, ... keys d_k -> ... queries keys")
+    attn_weights = attn_weights/d_k**0.5
     if mask is not None:
-        pre_softmax = pre_softmax.masked_fill(~mask, float("-inf"))
-    attn = softmax(pre_softmax, dim=-1)
-    return einsum(attn, V, "... queries keys, ... keys d_v -> ... queries d_v")
+        attn_weights = attn_weights.masked_fill(~mask, float("-inf"))
+    attn_scores = softmax(attn_weights, dim=-1)
+    out_proj = einsum(attn_scores, V, "... queries keys, ... keys d_v -> ... queries d_v")
+    return out_proj
 
 class MultiHeadSelfAttention(nn.Module):
     def __init__(self, d_model: int, num_heads: int, max_seq_len=None, theta=1e5, dtype=None, device=None):
